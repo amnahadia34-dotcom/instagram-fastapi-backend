@@ -15,7 +15,7 @@ router = APIRouter()
 # ---------------------------------------------------------
 # META WEBHOOK VERIFICATION (GET)
 # ---------------------------------------------------------
-@router.get("")   # <-- IMPORTANT: NO SLASH
+@router.get("/")   # <-- CORRECT FIX
 async def verify_token(request: Request):
     mode = request.query_params.get("hub.mode")
     token = request.query_params.get("hub.verify_token")
