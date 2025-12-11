@@ -8,4 +8,5 @@ openai
 gspread
 oauth2client
 PyPDF2
+python-docx
 
