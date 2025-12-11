@@ -1,0 +1,5 @@
+{
+  "inquiry": ["help", "question", "support"],
+  "purchase": ["buy", "order", "price"],
+  "feedback": ["love", "hate", "suggestion"]
+}
