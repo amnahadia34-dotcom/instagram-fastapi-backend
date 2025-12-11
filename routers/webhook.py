@@ -11,11 +11,27 @@ from services.keyword_service import detect_keywords
 
 router = APIRouter()
 
-GRAPH_VERSION = "v18.0"
+
+# ---------------------------------------------------------
+# META WEBHOOK VERIFICATION (GET)
+# ---------------------------------------------------------
+@router.get("")   # <-- IMPORTANT: NO SLASH
+async def verify_token(request: Request):
+    mode = request.query_params.get("hub.mode")
+    token = request.query_params.get("hub.verify_token")
+    challenge = request.query_params.get("hub.challenge")
+
+    VERIFY_TOKEN = "aurangzaib123"
+
+    if mode == "subscribe" and token == VERIFY_TOKEN:
+        return int(challenge)
+
+    return {"error": "Verification failed"}
+
 
 
 # ---------------------------------------------------------
-# Manual API Call Tester (from Streamlit)
+# Manual Reply (Streamlit Tester)
 # ---------------------------------------------------------
 class ManualRequest(BaseModel):
     comment: str
@@ -29,79 +45,43 @@ def manual_reply(data: ManualRequest):
     return {"reply": reply}
 
 
+
 # ---------------------------------------------------------
-# REAL INSTAGRAM WEBHOOK ENDPOINT
+# Instagram Webhook POST
 # ---------------------------------------------------------
 @router.post("/instagram")
 async def instagram_webhook(req: Request):
-
     body = await req.json()
     settings = load_settings()
 
     token = settings.get("instagram_token")
-    page_id = settings.get("instagram_id")
 
-    # Extract comment info from webhook (REAL IG structure)
     entry = body["entry"][0]["changes"][0]
-
     comment_text = entry["value"]["text"]
     comment_id = entry["value"]["id"]
     username = entry["value"].get("from", {}).get("username", "unknown")
 
-    # Push to Queue so Streamlit shows real-time notification
+    # Push event for Streamlit live notifications
     push_event({
         "username": username,
         "comment": comment_text,
         "comment_id": comment_id
     })
 
-    # If autoreply is OFF → do nothing
+    # Autoreply OFF → do not reply
     if settings.get("autoreply_status") == "OFF":
-        return {"message": "Received. Autoreply is OFF."}
+        return {"message": "Autoreply OFF"}
 
-    # ------------------------------------------------------
-    # AUTO-REPLY MODE (ON)
-    # ------------------------------------------------------
+    # Generate reply
     reply = generate_ai_reply(comment_text)
 
-    # Actually send reply to Instagram
+    # Send reply to Instagram
     send_instagram_reply(comment_id, reply, token)
 
-    # Keyword detection (your keyword_service.py)
+    # Detect keywords
     keyword_group = detect_keywords(comment_text)
 
-    # Save lead to Google Sheet
+    # Save lead into Google Sheet
     save_lead(username, comment_text, reply, keyword_group)
-
-    return {
-        "received": comment_text,
-        "reply_sent": reply,
-        "keyword_group": keyword_group
-    }
-
-
-# ---------------------------------------------------------
-# Streamlit "Generate Reply" → Call This
-# ---------------------------------------------------------
-class ReplyRequest(BaseModel):
-    comment: str
-    comment_id: str
-    username: str
-
-
-@router.post("/reply_now")
-def reply_now(req: ReplyRequest):
-
-    settings = load_settings()
-    token = settings.get("instagram_token")
-
-    reply = generate_ai_reply(req.comment)
-
-    # Send reply to IG
-    send_instagram_reply(req.comment_id, reply, token)
-
-    # Save in sheet
-    keyword_group = detect_keywords(req.comment)
-    save_lead(req.username, req.comment, reply, keyword_group)
 
     return {"reply": reply, "keyword_group": keyword_group}
