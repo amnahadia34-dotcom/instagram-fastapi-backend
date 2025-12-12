@@ -1,33 +1,27 @@
+# routers/realtime.py
+
 from fastapi import APIRouter
-from pydantic import BaseModel
-from core.settings import save_settings, load_settings
+from fastapi.responses import JSONResponse
 
-router = APIRouter()  # ❌ yahan prefix NAHI hoga
+router = APIRouter()
 
-class SettingsPayload(BaseModel):
-    instagram_token: str | None = None
-    instagram_id: str | None = None
-    openai_key: str | None = None
-    dataset_mode: str | None = "Use OpenAI"
-
-class AutoReplyPayload(BaseModel):
-    status: str  # "ON" or "OFF"
+# Global memory (production me Redis use karna hota)
+latest_comment_event = None
 
 
-@router.post("/save_all")
-def save_all_settings(data: SettingsPayload):
-    save_settings(data.model_dump())
-    return {"status": "saved"}
+@router.get("/events")
+def get_latest_event():
+    """
+    Streamlit dashboard calls this every 2 seconds.
+    If a new IG comment comes, webhook will update this value.
+    """
+    global latest_comment_event
+    return JSONResponse(latest_comment_event or {"event": None})
 
 
-@router.post("/autoreply")
-def update_autoreply(data: AutoReplyPayload):
-    settings = load_settings()
-    settings["autoreply_status"] = data.status
-    save_settings(settings)
-    return {"status": "updated", "autoreply": data.status}
-
-
-@router.get("/")
-def get_settings():
-    return load_settings()
+def send_event_to_ui(event: dict):
+    """
+    Called from webhook.py when IG comment arrives.
+    """
+    global latest_comment_event
+    latest_comment_event = event
