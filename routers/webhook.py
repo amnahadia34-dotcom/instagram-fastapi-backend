@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
+
 from core.settings import load_settings
 from services.queue_service import push_event
 from services.ai_service import generate_ai_reply
@@ -11,23 +12,22 @@ from services.keyword_service import detect_keywords
 
 router = APIRouter()
 
+VERIFY_TOKEN = "aurangzaib123"
+
 
 # ---------------------------------------------------------
 # META WEBHOOK VERIFICATION (GET)
 # ---------------------------------------------------------
-@router.get("/")   # <-- CORRECT FIX
+@router.get("/")
 async def verify_token(request: Request):
     mode = request.query_params.get("hub.mode")
     token = request.query_params.get("hub.verify_token")
     challenge = request.query_params.get("hub.challenge")
 
-    VERIFY_TOKEN = "aurangzaib123"
-
     if mode == "subscribe" and token == VERIFY_TOKEN:
         return int(challenge)
 
     return {"error": "Verification failed"}
-
 
 
 # ---------------------------------------------------------
@@ -41,9 +41,11 @@ class ManualRequest(BaseModel):
 
 @router.post("/manual")
 def manual_reply(data: ManualRequest):
-    reply = generate_ai_reply(data.comment)
-    return {"reply": reply}
-
+    try:
+        reply = generate_ai_reply(data.comment)
+        return {"reply": reply}
+    except Exception as e:
+        return {"error": str(e)}
 
 
 # ---------------------------------------------------------
@@ -51,37 +53,77 @@ def manual_reply(data: ManualRequest):
 # ---------------------------------------------------------
 @router.post("/instagram")
 async def instagram_webhook(req: Request):
-    body = await req.json()
-    settings = load_settings()
+    try:
+        body = await req.json()
+    except Exception:
+        return {"status": "invalid json"}
 
+    # Meta kabhi kabhi empty / test payload bhejta hai
+    if "entry" not in body:
+        return {"status": "ignored"}
+
+    settings = load_settings()
     token = settings.get("instagram_token")
 
-    entry = body["entry"][0]["changes"][0]
-    comment_text = entry["value"]["text"]
-    comment_id = entry["value"]["id"]
-    username = entry["value"].get("from", {}).get("username", "unknown")
+    if not token:
+        return {"error": "Instagram token missing"}
 
-    # Push event for Streamlit live notifications
-    push_event({
-        "username": username,
-        "comment": comment_text,
-        "comment_id": comment_id
-    })
+    responses = []
 
-    # Autoreply OFF → do not reply
-    if settings.get("autoreply_status") == "OFF":
-        return {"message": "Autoreply OFF"}
+    # Defensive loop (Meta-safe)
+    for entry in body.get("entry", []):
+        for change in entry.get("changes", []):
+            value = change.get("value", {})
 
-    # Generate reply
-    reply = generate_ai_reply(comment_text)
+            comment_text = value.get("text")
+            comment_id = value.get("id")
+            username = value.get("from", {}).get("username", "unknown")
 
-    # Send reply to Instagram
-    send_instagram_reply(comment_id, reply, token)
+            # Agar proper comment nahi hai to skip
+            if not comment_text or not comment_id:
+                continue
 
-    # Detect keywords
-    keyword_group = detect_keywords(comment_text)
+            # Streamlit live notification
+            push_event({
+                "username": username,
+                "comment": comment_text,
+                "comment_id": comment_id
+            })
 
-    # Save lead into Google Sheet
-    save_lead(username, comment_text, reply, keyword_group)
+            # Autoreply OFF check
+            if settings.get("autoreply_status") == "OFF":
+                responses.append({
+                    "comment_id": comment_id,
+                    "status": "autoreply off"
+                })
+                continue
 
-    return {"reply": reply, "keyword_group": keyword_group}
+            try:
+                # AI Reply
+                reply = generate_ai_reply(comment_text)
+
+                # Send reply to Instagram
+                send_instagram_reply(comment_id, reply, token)
+
+                # Keyword detection
+                keyword_group = detect_keywords(comment_text)
+
+                # Save lead
+                save_lead(username, comment_text, reply, keyword_group)
+
+                responses.append({
+                    "comment_id": comment_id,
+                    "reply": reply,
+                    "keyword_group": keyword_group
+                })
+
+            except Exception as e:
+                responses.append({
+                    "comment_id": comment_id,
+                    "error": str(e)
+                })
+
+    return {
+        "status": "processed",
+        "results": responses
+    }
